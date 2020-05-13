@@ -1,9 +1,3 @@
-package goatcounter
+package list
 
-import (
-	"zgo.at/goatcounter/cmd/goatcounter"
-)
-
-func f() {
-	_ = goatcounter.Ref
-}
+import _ "list/cmd/list"
