@@ -20,8 +20,6 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/go-chi/chi"
 	"zgo.at/goatcounter"
-	"zgo.at/goatcounter/cfg"
-	"zgo.at/goatcounter/gctest"
 	"zgo.at/isbot"
 	"zgo.at/tz"
 	"zgo.at/utils/sliceutil"
@@ -122,84 +120,17 @@ func TestBackendCount(t *testing.T) {
 		}},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx, clean := gctest.DB(t)
-			defer clean()
-
-			ctx, site := gctest.Site(ctx, t, goatcounter.Site{
-				CreatedAt: time.Date(2019, 01, 01, 0, 0, 0, 0, time.UTC),
-			})
-
-			r, rr := newTest(ctx, "GET", "/count?"+tt.query.Encode(), nil)
-			r.Host = site.Code + "." + cfg.Domain
-			if tt.set != nil {
-				tt.set(r)
-			}
-			login(t, rr, r, site.ID)
-
-			newBackend(zdb.MustGet(ctx)).ServeHTTP(rr, r)
-			ztest.Code(t, rr, tt.wantCode)
-
-			if tt.wantCode >= 400 {
-				return
-			}
-
-			_, err := goatcounter.Memstore.Persist(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			var hits []goatcounter.Hit
-			err = zdb.MustGet(ctx).SelectContext(ctx, &hits, `select * from hits`)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(hits) != 1 {
-				t.Fatalf("len(hits) = %d: %#v", len(hits), hits)
-			}
-
-			h := hits[0]
-			err = h.Validate(ctx)
-			if err != nil {
-				t.Errorf("Validate failed after get: %s", err)
-			}
-
-			one := int64(1)
-			tt.hit.ID = h.ID
-			tt.hit.Site = h.Site
-			tt.hit.CreatedAt = goatcounter.Now()
-			tt.hit.Session = &one // Should all be the same session.
-			if tt.hit.Browser == "" {
-				tt.hit.Browser = "GoatCounter test runner/1.0"
-			}
-			h.CreatedAt = h.CreatedAt.In(time.UTC)
-			if d := ztest.Diff(h.String(), tt.hit.String()); d != "" {
-				t.Error(d)
-			}
-		})
-	}
 }
 
 func TestBackendCountSessions(t *testing.T) {
 	now := time.Date(2019, 6, 18, 14, 42, 0, 0, time.UTC)
 	goatcounter.Now = func() time.Time { return now }
-	ctx, clean := gctest.DB(t)
-	defer clean()
-
-	ctx1, _ := gctest.Site(ctx, t, goatcounter.Site{
-		CreatedAt: time.Date(2019, 01, 01, 0, 0, 0, 0, time.UTC),
-	})
-	ctx2, _ := gctest.Site(ctx, t, goatcounter.Site{
-		CreatedAt: time.Date(2019, 01, 01, 0, 0, 0, 0, time.UTC),
-	})
 
 	send := func(ctx context.Context, ua string) {
 		site := goatcounter.MustGetSite(ctx)
 		query := url.Values{"p": {"/" + zhttp.Secret()}}
 
 		r, rr := newTest(ctx, "GET", "/count?"+query.Encode(), nil)
-		r.Host = site.Code + "." + cfg.Domain
 		r.Header.Set("User-Agent", ua)
 		newBackend(zdb.MustGet(ctx)).ServeHTTP(rr, r)
 		//t.Logf("X-Goatcounter: %s", rr.Header().Get("X-Goatcounter"))
@@ -331,11 +262,6 @@ func TestBackendTpl(t *testing.T) {
 		{
 			setup: func(ctx context.Context, t *testing.T) {
 				now := time.Date(2019, 8, 31, 14, 42, 0, 0, time.UTC)
-				gctest.StoreHits(ctx, t, []goatcounter.Hit{
-					{Site: 1, Path: "/asd", CreatedAt: now},
-					{Site: 1, Path: "/asd", CreatedAt: now},
-					{Site: 1, Path: "/zxc", CreatedAt: now},
-				}...)
 			},
 			router:   newBackend,
 			path:     "/purge?path=/asd",
@@ -376,11 +302,6 @@ func TestBackendPurge(t *testing.T) {
 		{
 			setup: func(ctx context.Context, t *testing.T) {
 				now := time.Date(2019, 8, 31, 14, 42, 0, 0, time.UTC)
-				gctest.StoreHits(ctx, t, []goatcounter.Hit{
-					{Site: 1, Path: "/asd", CreatedAt: now},
-					{Site: 1, Path: "/asd", CreatedAt: now},
-					{Site: 1, Path: "/zxc", CreatedAt: now},
-				}...)
 			},
 			router:       newBackend,
 			path:         "/purge",
@@ -705,23 +626,7 @@ func TestBackendBarChart(t *testing.T) {
 	zlog.Config.Debug = []string{}
 
 	run := func(t *testing.T, tt testcase, url, want string) {
-		ctx, clean := gctest.DB(t)
-		defer clean()
-
-		ctx, site := gctest.Site(ctx, t, goatcounter.Site{
-			CreatedAt: time.Date(2019, 01, 01, 0, 0, 0, 0, time.UTC),
-			Settings:  goatcounter.SiteSettings{Timezone: tz.MustNew("", tt.zone)},
-		})
-		one := int64(1)
-		gctest.StoreHits(ctx, t, goatcounter.Hit{
-			Site:      site.ID,
-			Session:   &one,
-			CreatedAt: tt.hit.UTC(),
-			Path:      "/a",
-		})
-
 		r, rr := newTest(ctx, "GET", url, nil)
-		r.Host = site.Code + "." + cfg.Domain
 		login(t, rr, r, site.ID)
 
 		newBackend(zdb.MustGet(ctx)).ServeHTTP(rr, r)
@@ -775,7 +680,6 @@ func TestBackendBarChart(t *testing.T) {
 }
 
 func BenchmarkCount(b *testing.B) {
-	ctx, clean := gctest.DB(b)
 	defer clean()
 
 	r, rr := newTest(ctx, "GET", "/count", nil)
